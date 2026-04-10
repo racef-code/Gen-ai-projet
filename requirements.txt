@@ -1,0 +1,43 @@
+# ── Interface ────────────────────────────────────────────────────────────────
+streamlit>=1.35.0
+
+# ── Orchestration RAG ────────────────────────────────────────────────────────
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-ollama>=0.1.0
+
+# ── Loaders de documents ─────────────────────────────────────────────────────
+pypdf>=4.0.0
+python-docx>=1.1.0
+unstructured>=0.14.0
+
+# ── Scraping web ─────────────────────────────────────────────────────────────
+beautifulsoup4>=4.12.0
+requests>=2.32.0
+lxml>=5.2.0
+
+# ── Base vectorielle ─────────────────────────────────────────────────────────
+chromadb>=0.5.0
+
+# ── Topic Modeling & NLP ─────────────────────────────────────────────────────
+bertopic>=0.16.0
+scikit-learn>=1.5.0
+umap-learn>=0.5.6
+nltk>=3.8.0
+spacy>=3.7.0
+
+# ── Clustering incrémental (requis par BERTopic online) ──────────────────────
+river>=0.21.0
+
+# ── Visualisations ───────────────────────────────────────────────────────────
+plotly>=5.22.0
+wordcloud>=1.9.0
+
+# ── Persistance ──────────────────────────────────────────────────────────────
+sqlalchemy>=2.0.0
+
+# ── Utilitaires ──────────────────────────────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.2.0
+tqdm>=4.66.0
+python-magic>=0.4.27
