@@ -65,8 +65,21 @@ def main() -> None:
         st.session_state["current_page"] = selected
 
         st.divider()
-        st.caption(f"Modèle LLM : `{_get_config('LLM_MODEL')}`")
-        st.caption(f"Embeddings : `{_get_config('EMBED_MODEL')}`")
+        st.caption(f"LLM : `{_get_config('LLM_MODEL')}`")
+        st.caption(f"Embed : `{_get_config('EMBED_MODEL')}`")
+
+        # ── Stats globales (Module D) ──────────────────────────────
+        st.divider()
+        try:
+            from persistence.incremental import get_global_stats
+            gs = get_global_stats()
+            st.metric("Documents", gs["total_docs"])
+            st.metric("Chunks", gs["total_chunks"])
+            topic_state = st.session_state.get("topic_model_state")
+            nb_topics = len(topic_state.topic_labels) if topic_state else 0
+            st.metric("Topics", nb_topics)
+        except Exception:
+            pass
 
     # ── Rendu de la page active ───────────────────────────────────────────
     if selected == "ingestion":

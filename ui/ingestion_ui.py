@@ -7,6 +7,8 @@ Fonctionnalités :
 - Aperçu du texte extrait avant intégration.
 - Sélection de la stratégie de chunking et affichage des stats.
 - Bouton "Intégrer" pour lancer le pipeline complet (chunk + embed + store).
+- Déduplication automatique par hash SHA-256 (Module D).
+- Mise à jour incrémentale du topic model après chaque ingestion (Module D).
 - Affichage du statut en temps réel et de la liste des documents ingérés.
 """
 from __future__ import annotations
@@ -25,6 +27,7 @@ from ingestion.chunker import chunk_text, get_chunks_stats
 from ingestion.embedder import check_ollama_connection, embed_chunks
 from ingestion.loaders import SUPPORTED_EXTENSIONS, load_document
 from ingestion.scraper import scrape_url
+from persistence.incremental import compute_text_hash, is_duplicate, run_incremental_update
 from persistence.metadata_store import save_document
 from persistence.vector_store import add_chunks as vs_add_chunks
 
@@ -236,14 +239,25 @@ def _run_ingestion_pipeline(
 ) -> None:
     """
     Exécute le pipeline complet :
-    1. Chunking
-    2. Embedding (via Ollama)
-    3. Stockage dans ChromaDB
-    4. Enregistrement des métadonnées
+    1. Déduplication (hash SHA-256)
+    2. Chunking
+    3. Embedding (via Ollama)
+    4. Stockage dans ChromaDB
+    5. Enregistrement des métadonnées (SQLite)
+    6. Mise à jour incrémentale du topic model
     """
+    # ── Étape 0 : Déduplication ───────────────────────────────────────
+    doc_hash = compute_text_hash(text)
+    duplicate, dup_name = is_duplicate(doc_hash)
+    if duplicate:
+        st.warning(
+            f"Ce document est un doublon de **{dup_name}** (même contenu). "
+            "Ingestion annulée."
+        )
+        return
+
     doc_id = str(uuid.uuid4())
     ingested_at = datetime.now().isoformat(timespec="seconds")
-
     progress = st.progress(0, text="Démarrage du pipeline...")
 
     try:
@@ -262,15 +276,15 @@ def _run_ingestion_pipeline(
             return
 
         # ── Étape 2 : Embedding ───────────────────────────────────────
-        progress.progress(30, text=f"Calcul des embeddings ({len(chunks)} chunks)...")
+        progress.progress(25, text=f"Calcul des embeddings ({len(chunks)} chunks)...")
         vectors = embed_chunks(chunks)
 
         # ── Étape 3 : Stockage dans ChromaDB ─────────────────────────
-        progress.progress(70, text="Stockage dans la base vectorielle...")
+        progress.progress(60, text="Stockage dans la base vectorielle...")
         vs_add_chunks(chunks, vectors)
 
         # ── Étape 4 : Métadonnées (SQLite + session_state) ────────────
-        progress.progress(90, text="Enregistrement des métadonnées...")
+        progress.progress(75, text="Enregistrement des métadonnées...")
         stats = get_chunks_stats(chunks)
 
         doc_meta = {
@@ -281,25 +295,65 @@ def _run_ingestion_pipeline(
             "nb_chars": len(text),
             "strategy": strategy,
             "ingested_at": ingested_at,
+            "doc_hash": doc_hash,
             **extra_metadata,
         }
-        save_document(doc_meta)   # persistance SQLite (survit aux redémarrages)
-        add_ingested_doc(doc_meta)  # session_state (affichage immédiat)
+        save_document(doc_meta)
+        add_ingested_doc(doc_meta)
+
+        # ── Étape 5 : Mise à jour incrémentale du topic model ─────────
+        progress.progress(85, text="Mise à jour du topic model (incrémental)...")
+        incremental_result = run_incremental_update(st.session_state)
 
         progress.progress(100, text="Ingestion terminée !")
+
+        # Message de succès principal
         st.success(
             f"**{source_name}** ingéré avec succès — "
             f"{stats['count']} chunks, {len(text):,} caractères."
         )
+
+        # Notification sur les nouveaux topics détectés
+        _notify_new_topics(incremental_result)
+
         # Nettoyer les données temporaires de scraping
         st.session_state.pop("_scraped_url_data", None)
 
     except ConnectionError as exc:
         progress.empty()
-        st.error(f"Ollama inaccessible : {exc}. Vérifiez qu'Ollama tourne sur `{st.session_state.get('ollama_url', 'localhost:11434')}`.")
+        st.error(
+            f"Ollama inaccessible : {exc}. "
+            "Vérifiez qu'Ollama tourne (`ollama serve`) et que "
+            "`nomic-embed-text` est disponible (`ollama pull nomic-embed-text`)."
+        )
     except Exception as exc:
         progress.empty()
         st.error(f"Erreur lors de l'ingestion : {exc}")
+
+
+def _notify_new_topics(incremental_result: dict) -> None:
+    """Affiche une notification si de nouveaux topics ont été détectés."""
+    if not incremental_result.get("success"):
+        if incremental_result.get("error"):
+            st.info(
+                f"Topic modeling ignoré : {incremental_result['error']}"
+            )
+        return
+
+    new_topics = incremental_result.get("new_topics", [])
+    new_labels = incremental_result.get("new_labels", {})
+    total = incremental_result.get("total_topics", 0)
+
+    if new_topics:
+        labels_str = ", ".join(
+            f"**{new_labels.get(t, f'Topic {t}')}**" for t in new_topics
+        )
+        st.info(
+            f"Topic model mis à jour : {len(new_topics)} nouveau(x) thème(s) détecté(s) "
+            f"→ {labels_str}  ({total} thèmes au total)"
+        )
+    else:
+        st.caption(f"Topic model : {total} thèmes connus, aucun nouveau.")
 
 
 # ── Liste des documents ingérés ───────────────────────────────────────────────

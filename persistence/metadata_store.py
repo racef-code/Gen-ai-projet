@@ -2,10 +2,12 @@
 Persistance des métadonnées via SQLite (SQLAlchemy Core).
 
 Tables :
-  - documents   : un enregistrement par document ingéré.
-  - chat_history: historique des échanges (optionnel, pour la persistance inter-sessions).
+  - documents   : un enregistrement par document ingéré (avec hash SHA-256).
+  - chat_history: historique des échanges (persistance inter-sessions).
 
 Le fichier DB est créé automatiquement dans data/metadata.db.
+Migration automatique : si la table existe sans la colonne doc_hash,
+elle est ajoutée via ALTER TABLE.
 """
 from __future__ import annotations
 
@@ -45,6 +47,7 @@ documents_table = Table(
     Column("nb_chars", Integer, nullable=False),
     Column("strategy", String, nullable=False),
     Column("ingested_at", String, nullable=False),   # ISO 8601
+    Column("doc_hash", String, nullable=True),        # SHA-256 du texte brut (déduplication)
     Column("extra_json", Text, nullable=True),        # JSON pour les champs optionnels (url, etc.)
 )
 
@@ -67,8 +70,33 @@ def _get_engine() -> Engine:
         db_url = f"sqlite:///{DB_PATH}"
         _engine = create_engine(db_url, echo=False, future=True)
         _metadata.create_all(_engine)
+        _migrate(_engine)
         logger.info("SQLite initialisé : %s", DB_PATH)
     return _engine
+
+
+def _migrate(engine: Engine) -> None:
+    """
+    Migration automatique : ajoute les colonnes manquantes si la table
+    `documents` existe déjà depuis une version antérieure du schéma.
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                __import__("sqlalchemy").text("PRAGMA table_info(documents)")
+            ).fetchall()
+            existing_cols = {row[1] for row in result}
+
+            if "doc_hash" not in existing_cols:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        "ALTER TABLE documents ADD COLUMN doc_hash TEXT"
+                    )
+                )
+                conn.commit()
+                logger.info("Migration SQLite : colonne 'doc_hash' ajoutée.")
+    except Exception as exc:
+        logger.warning("Migration SQLite ignorée : %s", exc)
 
 
 # ── Documents ─────────────────────────────────────────────────────────────────
@@ -84,7 +112,8 @@ def save_document(doc_meta: dict) -> None:
     """
     engine = _get_engine()
 
-    known_keys = {"id", "name", "source_type", "nb_chunks", "nb_chars", "strategy", "ingested_at"}
+    known_keys = {"id", "name", "source_type", "nb_chunks", "nb_chars",
+                  "strategy", "ingested_at", "doc_hash"}
     extra = {k: v for k, v in doc_meta.items() if k not in known_keys}
 
     row = {
@@ -95,6 +124,7 @@ def save_document(doc_meta: dict) -> None:
         "nb_chars": doc_meta["nb_chars"],
         "strategy": doc_meta["strategy"],
         "ingested_at": doc_meta["ingested_at"],
+        "doc_hash": doc_meta.get("doc_hash"),
         "extra_json": json.dumps(extra) if extra else None,
     }
 
