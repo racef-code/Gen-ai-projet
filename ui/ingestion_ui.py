@@ -25,6 +25,8 @@ from ingestion.chunker import chunk_text, get_chunks_stats
 from ingestion.embedder import check_ollama_connection, embed_chunks
 from ingestion.loaders import SUPPORTED_EXTENSIONS, load_document
 from ingestion.scraper import scrape_url
+from persistence.metadata_store import save_document
+from persistence.vector_store import add_chunks as vs_add_chunks
 
 
 def render_ingestion_page() -> None:
@@ -265,9 +267,9 @@ def _run_ingestion_pipeline(
 
         # ── Étape 3 : Stockage dans ChromaDB ─────────────────────────
         progress.progress(70, text="Stockage dans la base vectorielle...")
-        _store_in_chromadb(chunks, vectors)
+        vs_add_chunks(chunks, vectors)
 
-        # ── Étape 4 : Métadonnées ─────────────────────────────────────
+        # ── Étape 4 : Métadonnées (SQLite + session_state) ────────────
         progress.progress(90, text="Enregistrement des métadonnées...")
         stats = get_chunks_stats(chunks)
 
@@ -281,7 +283,8 @@ def _run_ingestion_pipeline(
             "ingested_at": ingested_at,
             **extra_metadata,
         }
-        add_ingested_doc(doc_meta)
+        save_document(doc_meta)   # persistance SQLite (survit aux redémarrages)
+        add_ingested_doc(doc_meta)  # session_state (affichage immédiat)
 
         progress.progress(100, text="Ingestion terminée !")
         st.success(
@@ -299,51 +302,53 @@ def _run_ingestion_pipeline(
         st.error(f"Erreur lors de l'ingestion : {exc}")
 
 
-def _store_in_chromadb(chunks, vectors) -> None:
-    """Stocke les chunks et leurs vecteurs dans ChromaDB."""
-    try:
-        import chromadb
-        from app.config import CHROMA_COLLECTION_NAME, CHROMA_DIR
-
-        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        collection = client.get_or_create_collection(
-            name=CHROMA_COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
-
-        ids = [f"{c.doc_id}__{c.chunk_index}" for c in chunks]
-        documents = [c.text for c in chunks]
-        metadatas = [c.metadata for c in chunks]
-
-        collection.upsert(
-            ids=ids,
-            embeddings=vectors,
-            documents=documents,
-            metadatas=metadatas,
-        )
-    except ImportError as exc:
-        raise ImportError("chromadb est requis : pip install chromadb") from exc
-
-
 # ── Liste des documents ingérés ───────────────────────────────────────────────
 
 def _render_ingested_docs_list() -> None:
-    docs = get_ingested_docs()
+    """
+    Affiche les documents ingérés.
+    Source : SQLite (persistant) fusionné avec le session_state (session courante).
+    """
+    from persistence.metadata_store import get_all_documents
+    from persistence.vector_store import delete_doc as vs_delete_doc
+    from persistence.metadata_store import delete_document as db_delete_doc
+
+    # Charger depuis SQLite (inclut les sessions précédentes)
+    try:
+        docs = get_all_documents()
+    except Exception:
+        docs = get_ingested_docs()  # fallback session_state
+
     st.subheader(f"Documents ingérés ({len(docs)})")
 
     if not docs:
-        st.info("Aucun document ingéré dans cette session.")
+        st.info("Aucun document ingéré.")
         return
 
-    for doc in reversed(docs):  # Plus récent en premier
+    for doc in docs:  # SQLite trie déjà par date desc
         icon = "URL" if doc.get("source_type") == "url" else "FICHIER"
         with st.expander(f"[{icon}] {doc['name']} — {doc['ingested_at']}"):
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
             col1.metric("Chunks", doc["nb_chunks"])
             col2.metric("Caractères", f"{doc['nb_chars']:,}")
             col3.metric("Stratégie", doc["strategy"])
             if doc.get("url"):
                 st.caption(f"Source : {doc['url']}")
+
+            # Bouton de suppression
+            if col4.button("Supprimer", key=f"del_{doc['id']}", type="secondary"):
+                try:
+                    vs_delete_doc(doc["id"])
+                    db_delete_doc(doc["id"])
+                    # Retirer du session_state aussi
+                    st.session_state["ingested_docs"] = [
+                        d for d in st.session_state.get("ingested_docs", [])
+                        if d["id"] != doc["id"]
+                    ]
+                    st.success(f"Document **{doc['name']}** supprimé.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Erreur lors de la suppression : {exc}")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

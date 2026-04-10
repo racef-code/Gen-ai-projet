@@ -1,0 +1,138 @@
+"""
+Agent RAG — LangChain + ChatOllama.
+
+Architecture de la chain :
+  1. Récupération des top_k chunks via le vector_store (retriever custom).
+  2. Construction du prompt avec le contexte injecté.
+  3. Appel au LLM local (ChatOllama).
+  4. Retour structuré : réponse + sources (pour le panneau de transparence).
+
+Le prompt est en français et explicitement instruit pour :
+- Ne répondre QUE d'après le contexte fourni.
+- Indiquer clairement si l'information n'est pas dans les documents.
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
+
+from app.config import LLM_MODEL, OLLAMA_BASE_URL, RETRIEVAL_TOP_K
+from ingestion.embedder import embed_query
+from persistence.vector_store import query_similar
+
+logger = logging.getLogger(__name__)
+
+# ── Prompt système ────────────────────────────────────────────────────────────
+_SYSTEM_PROMPT = """Tu es un assistant expert en analyse documentaire. \
+Tu réponds UNIQUEMENT à partir des extraits de documents fournis dans le contexte ci-dessous.
+
+Règles strictes :
+1. Si la réponse n'est pas dans le contexte, dis-le clairement : \
+"Je ne trouve pas cette information dans les documents fournis."
+2. Ne fabrique jamais d'informations.
+3. Cite le document source lorsque c'est pertinent.
+4. Réponds en français, de manière concise et structurée.
+
+CONTEXTE :
+{context}
+"""
+
+_HUMAN_PROMPT = "{question}"
+
+
+def build_rag_chain():
+    """Construit et retourne la chain LangChain (ChatOllama + prompt)."""
+    try:
+        from langchain_ollama import ChatOllama
+    except ImportError as exc:
+        raise ImportError("langchain-ollama est requis : pip install langchain-ollama") from exc
+
+    llm = ChatOllama(
+        model=LLM_MODEL,
+        base_url=OLLAMA_BASE_URL,
+        temperature=0.1,        # Réponses factuelles, peu créatives
+        num_predict=1024,        # Longueur max de la réponse
+    )
+
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessage(content=_SYSTEM_PROMPT),
+        HumanMessage(content=_HUMAN_PROMPT),
+    ])
+
+    return prompt | llm
+
+
+# ── Point d'entrée principal ──────────────────────────────────────────────────
+
+def ask(
+    question: str,
+    top_k: int = RETRIEVAL_TOP_K,
+    filter_doc_ids: list[str] | None = None,
+) -> dict:
+    """
+    Pipeline RAG complet : embed question → retrieve chunks → LLM → réponse.
+
+    Args:
+        question:       Question de l'utilisateur.
+        top_k:          Nombre de chunks à récupérer.
+        filter_doc_ids: Restriction optionnelle à certains documents.
+
+    Returns:
+        Dict avec :
+          - answer  (str)  : réponse du LLM
+          - sources (list) : chunks utilisés comme contexte
+          - latency (float): temps de réponse en secondes
+          - question(str)  : question originale
+    """
+    start = time.perf_counter()
+
+    # ── 1. Embedding de la question ───────────────────────────────────
+    logger.info("RAG : embedding de la question...")
+    try:
+        query_vector = embed_query(question)
+    except RuntimeError as exc:
+        raise RuntimeError(f"Impossible d'embedder la question : {exc}") from exc
+
+    # ── 2. Retrieval ──────────────────────────────────────────────────
+    logger.info("RAG : retrieval top-%d...", top_k)
+    hits = query_similar(query_vector, top_k=top_k, filter_doc_ids=filter_doc_ids)
+
+    if not hits:
+        return {
+            "answer": "Aucun document n'a encore été ingéré. "
+                      "Veuillez d'abord ajouter des documents dans l'onglet **Ingestion**.",
+            "sources": [],
+            "latency": time.perf_counter() - start,
+            "question": question,
+        }
+
+    # ── 3. Construction du contexte ───────────────────────────────────
+    context_parts = []
+    for i, hit in enumerate(hits, 1):
+        source_label = hit["metadata"].get("source", f"Document {hit['doc_id'][:8]}")
+        context_parts.append(
+            f"[Extrait {i} — Source : {source_label}]\n{hit['text']}"
+        )
+    context = "\n\n---\n\n".join(context_parts)
+
+    # ── 4. Appel LLM ──────────────────────────────────────────────────
+    logger.info("RAG : appel LLM '%s'...", LLM_MODEL)
+    try:
+        chain = build_rag_chain()
+        response = chain.invoke({"context": context, "question": question})
+        answer = response.content if hasattr(response, "content") else str(response)
+    except Exception as exc:
+        raise RuntimeError(f"Erreur LLM ({LLM_MODEL}) : {exc}") from exc
+
+    latency = time.perf_counter() - start
+    logger.info("RAG terminé en %.2fs", latency)
+
+    return {
+        "answer": answer,
+        "sources": hits,
+        "latency": latency,
+        "question": question,
+    }

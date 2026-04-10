@@ -74,10 +74,8 @@ def main() -> None:
         render_ingestion_page()
 
     elif selected == "chat":
-        st.title("Chat & RAG")
-        st.info(
-            "Le module Chat (RAG) sera disponible après l'implémentation du **Module B**."
-        )
+        from ui.chat_ui import render_chat_page
+        render_chat_page()
 
     elif selected == "analytics":
         st.title("Tableau de Bord Analytique")
