@@ -78,10 +78,8 @@ def main() -> None:
         render_chat_page()
 
     elif selected == "analytics":
-        st.title("Tableau de Bord Analytique")
-        st.info(
-            "Le tableau de bord analytique sera disponible après l'implémentation du **Module C**."
-        )
+        from ui.analytics_ui import render_analytics_page
+        render_analytics_page()
 
 
 def _get_config(key: str) -> str:
