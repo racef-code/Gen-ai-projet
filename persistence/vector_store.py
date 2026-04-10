@@ -70,7 +70,11 @@ def add_chunks(chunks: "list[Chunk]", vectors: list[list[float]]) -> None:
 
     ids = [f"{c.doc_id}__{c.chunk_index}" for c in chunks]
     documents = [c.text for c in chunks]
-    metadatas = [_sanitize_metadata(c.metadata) for c in chunks]
+    # On s'assure que doc_id est toujours dans les métadonnées (requis pour delete/filter)
+    metadatas = [
+        _sanitize_metadata({**c.metadata, "doc_id": c.doc_id})
+        for c in chunks
+    ]
 
     # upsert : ré-ingestion d'un doc déjà présent → mise à jour
     collection.upsert(
