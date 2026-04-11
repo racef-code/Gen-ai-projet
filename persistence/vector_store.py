@@ -175,6 +175,19 @@ def delete_doc(doc_id: str) -> int:
         collection.delete(ids=ids_to_delete)
         logger.info("ChromaDB : %d chunks supprimés pour doc_id=%s", len(ids_to_delete), doc_id)
 
+        # Vérification post-suppression : s'assure qu'aucun chunk ne subsiste
+        remaining = collection.get(
+            where={"doc_id": {"$eq": doc_id}},
+            include=[],
+        )
+        if remaining["ids"]:
+            logger.warning(
+                "Suppression ChromaDB incomplète : %d chunk(s) encore présent(s) "
+                "pour doc_id=%s",
+                len(remaining["ids"]),
+                doc_id,
+            )
+
     return len(ids_to_delete)
 
 

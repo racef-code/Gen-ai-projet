@@ -6,13 +6,16 @@ Architecture :
 - Traite les chunks par batch pour éviter de saturer Ollama.
 - Retourne les vecteurs dans le même ordre que les chunks d'entrée.
 - Gère le cas où Ollama n'est pas disponible avec un message d'erreur clair.
+- Retry automatique (3 tentatives, backoff exponentiel 1s/2s/4s) sur chaque
+  batch et sur les requêtes individuelles.
 """
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
-from app.config import EMBED_MODEL, OLLAMA_BASE_URL
+from app.config import EMBED_MODEL, OLLAMA_BASE_URL, OLLAMA_TIMEOUT
 
 if TYPE_CHECKING:
     from ingestion.chunker import Chunk
@@ -21,6 +24,34 @@ logger = logging.getLogger(__name__)
 
 # Taille des batches envoyés à Ollama (évite les timeouts sur gros volumes)
 _EMBED_BATCH_SIZE = 32
+# Nombre maximal de tentatives en cas d'erreur transitoire Ollama
+_MAX_RETRY = 3
+
+
+def _with_retry(fn, max_attempts: int = _MAX_RETRY, base_delay: float = 1.0):
+    """
+    Exécute fn avec backoff exponentiel en cas d'échec.
+
+    Tentatives : 1s → 2s → 4s (par défaut).
+    Relance la dernière exception si toutes les tentatives échouent.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "Ollama embedding : tentative %d/%d échouée (%s). "
+                    "Nouvel essai dans %.1fs...",
+                    attempt + 1, max_attempts, exc, delay,
+                )
+                time.sleep(delay)
+    raise RuntimeError(
+        f"Embedding échoué après {max_attempts} tentatives : {last_exc}"
+    ) from last_exc
 
 
 def embed_chunks(chunks: "list[Chunk]") -> list[list[float]]:
@@ -35,7 +66,7 @@ def embed_chunks(chunks: "list[Chunk]") -> list[list[float]]:
 
     Raises:
         ConnectionError: Si Ollama n'est pas accessible.
-        RuntimeError:    Si l'embedding échoue.
+        RuntimeError:    Si l'embedding échoue après toutes les tentatives.
     """
     if not chunks:
         return []
@@ -50,8 +81,8 @@ def embed_chunks(chunks: "list[Chunk]") -> list[list[float]]:
     for batch_start in range(0, total, _EMBED_BATCH_SIZE):
         batch = texts[batch_start: batch_start + _EMBED_BATCH_SIZE]
         try:
-            batch_vectors = embedder.embed_documents(batch)
-        except Exception as exc:
+            batch_vectors = _with_retry(lambda b=batch: embedder.embed_documents(b))
+        except RuntimeError as exc:
             raise RuntimeError(
                 f"Erreur d'embedding (batch {batch_start}–{batch_start + len(batch)}): {exc}"
             ) from exc
@@ -80,8 +111,8 @@ def embed_query(query: str) -> list[float]:
     """
     embedder = _get_embedder()
     try:
-        return embedder.embed_query(query)
-    except Exception as exc:
+        return _with_retry(lambda: embedder.embed_query(query))
+    except RuntimeError as exc:
         raise RuntimeError(f"Erreur d'embedding de la requête : {exc}") from exc
 
 
@@ -120,4 +151,5 @@ def _get_embedder():
     return OllamaEmbeddings(
         model=EMBED_MODEL,
         base_url=OLLAMA_BASE_URL,
+        timeout=OLLAMA_TIMEOUT,
     )

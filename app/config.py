@@ -36,6 +36,10 @@ RETRIEVAL_TOP_K = 5            # nombre de chunks retournés par le retriever
 MIN_TOPIC_SIZE = 3             # taille minimale d'un cluster BERTopic
 NR_TOPICS = "auto"             # ou un entier fixe
 
+# ── Timeout & Limites ────────────────────────────────────────────────────────
+OLLAMA_TIMEOUT = 120           # secondes (timeout par requête Ollama)
+MAX_FILE_SIZE_MB = 50          # taille max d'un fichier uploadé (Mo)
+
 # ── Scraper ───────────────────────────────────────────────────────────────────
 SCRAPER_TIMEOUT = 15           # secondes
 SCRAPER_USER_AGENT = (

@@ -10,6 +10,8 @@ import io
 import logging
 from pathlib import Path
 
+from app.config import MAX_FILE_SIZE_MB
+
 logger = logging.getLogger(__name__)
 
 # ── Types supportés ───────────────────────────────────────────────────────────
@@ -28,9 +30,18 @@ def load_document(file_bytes: bytes, filename: str) -> str:
         Texte extrait et nettoyé.
 
     Raises:
-        ValueError: Si l'extension n'est pas supportée.
+        ValueError: Si l'extension n'est pas supportée ou si le fichier dépasse
+                    la limite de taille configurée (MAX_FILE_SIZE_MB).
         RuntimeError: Si l'extraction échoue.
     """
+    # ── Validation de la taille ───────────────────────────────────────────
+    size_mb = len(file_bytes) / (1024 * 1024)
+    if size_mb > MAX_FILE_SIZE_MB:
+        raise ValueError(
+            f"Fichier trop volumineux ({size_mb:.1f} Mo). "
+            f"Limite configurée : {MAX_FILE_SIZE_MB} Mo."
+        )
+
     ext = Path(filename).suffix.lower()
 
     if ext not in SUPPORTED_EXTENSIONS:

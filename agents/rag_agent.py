@@ -10,6 +10,9 @@ Architecture de la chain :
 Le prompt est en français et explicitement instruit pour :
 - Ne répondre QUE d'après le contexte fourni.
 - Indiquer clairement si l'information n'est pas dans les documents.
+
+Retry automatique (3 tentatives, backoff exponentiel 1s/2s/4s) sur l'appel LLM
+en cas d'erreur transitoire Ollama.
 """
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-from app.config import LLM_MODEL, OLLAMA_BASE_URL, RETRIEVAL_TOP_K
+from app.config import LLM_MODEL, OLLAMA_BASE_URL, OLLAMA_TIMEOUT, RETRIEVAL_TOP_K
 from ingestion.embedder import embed_query
 from persistence.vector_store import query_similar
 
@@ -42,6 +45,35 @@ CONTEXTE :
 
 _HUMAN_PROMPT = "{question}"
 
+# Nombre maximal de tentatives en cas d'erreur transitoire Ollama
+_MAX_RETRY = 3
+
+
+def _with_retry(fn, max_attempts: int = _MAX_RETRY, base_delay: float = 1.0):
+    """
+    Exécute fn avec backoff exponentiel en cas d'échec.
+
+    Tentatives : 1s → 2s → 4s (par défaut).
+    Relance la dernière exception si toutes les tentatives échouent.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "LLM : tentative %d/%d échouée (%s). "
+                    "Nouvel essai dans %.1fs...",
+                    attempt + 1, max_attempts, exc, delay,
+                )
+                time.sleep(delay)
+    raise RuntimeError(
+        f"LLM échoué après {max_attempts} tentatives : {last_exc}"
+    ) from last_exc
+
 
 def build_rag_chain():
     """Construit et retourne la chain LangChain (ChatOllama + prompt)."""
@@ -55,6 +87,7 @@ def build_rag_chain():
         base_url=OLLAMA_BASE_URL,
         temperature=0.1,        # Réponses factuelles, peu créatives
         num_predict=1024,        # Longueur max de la réponse
+        timeout=OLLAMA_TIMEOUT,  # Timeout explicite pour éviter les blocages
     )
 
     prompt = ChatPromptTemplate.from_messages([
@@ -118,13 +151,15 @@ def ask(
         )
     context = "\n\n---\n\n".join(context_parts)
 
-    # ── 4. Appel LLM ──────────────────────────────────────────────────
+    # ── 4. Appel LLM (avec retry) ─────────────────────────────────────
     logger.info("RAG : appel LLM '%s'...", LLM_MODEL)
     try:
         chain = build_rag_chain()
-        response = chain.invoke({"context": context, "question": question})
+        response = _with_retry(
+            lambda: chain.invoke({"context": context, "question": question})
+        )
         answer = response.content if hasattr(response, "content") else str(response)
-    except Exception as exc:
+    except RuntimeError as exc:
         raise RuntimeError(f"Erreur LLM ({LLM_MODEL}) : {exc}") from exc
 
     latency = time.perf_counter() - start
