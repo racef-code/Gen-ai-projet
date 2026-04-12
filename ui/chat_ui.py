@@ -25,7 +25,7 @@ from persistence.metadata_store import clear_chat_history
 def render_chat_page() -> None:
     """Render complet de la page Chat & RAG."""
     st.title("Chat & RAG")
-    st.caption("Posez vos questions — les réponses sont générées localement via Ollama.")
+    st.caption("Posez vos questions — les réponses sont générées localement via LM Studio (Mistral 7B Q4).")
 
     # Initialisation de l'ID de session (persistant dans session_state)
     if "session_id" not in st.session_state:

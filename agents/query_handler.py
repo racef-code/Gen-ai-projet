@@ -107,20 +107,20 @@ def _humanize_error(error: str) -> str:
 
     if "connection" in error_lower or "refused" in error_lower:
         return (
-            "Ollama n'est pas accessible. "
-            "Assurez-vous qu'Ollama tourne localement (`ollama serve`) "
-            "et que le modèle est téléchargé (`ollama pull llama3`)."
+            "LM Studio n'est pas accessible. "
+            "Assurez-vous que LM Studio est ouvert, qu'un modèle est chargé "
+            "et que le serveur local est démarré (port 1234)."
         )
     if "model" in error_lower and "not found" in error_lower:
         return (
-            "Le modèle LLM demandé n'est pas installé dans Ollama. "
-            "Exécutez : `ollama pull llama3`"
+            "Le modèle demandé n'est pas chargé dans LM Studio. "
+            "Ouvrez LM Studio, chargez le modèle puis redémarrez le serveur."
         )
     if "embed" in error_lower:
         return (
             "Erreur lors de l'embedding. "
-            "Vérifiez que nomic-embed-text est disponible : "
-            "`ollama pull nomic-embed-text`"
+            "Vérifiez que le modèle d'embedding (nomic-embed-text-v1.5) "
+            "est chargé dans LM Studio et que le serveur est actif."
         )
 
     return f"Une erreur est survenue : {error}"

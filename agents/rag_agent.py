@@ -1,10 +1,10 @@
 """
-Agent RAG — LangChain + ChatOllama.
+Agent RAG — LangChain + ChatOpenAI (LM Studio).
 
 Architecture de la chain :
   1. Récupération des top_k chunks via le vector_store (retriever custom).
   2. Construction du prompt avec le contexte injecté.
-  3. Appel au LLM local (ChatOllama).
+  3. Appel au LLM local via LM Studio (API compatible OpenAI).
   4. Retour structuré : réponse + sources (pour le panneau de transparence).
 
 Le prompt est en français et explicitement instruit pour :
@@ -12,7 +12,7 @@ Le prompt est en français et explicitement instruit pour :
 - Indiquer clairement si l'information n'est pas dans les documents.
 
 Retry automatique (3 tentatives, backoff exponentiel 1s/2s/4s) sur l'appel LLM
-en cas d'erreur transitoire Ollama.
+en cas d'erreur transitoire LM Studio.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-from app.config import LLM_MODEL, OLLAMA_BASE_URL, OLLAMA_TIMEOUT, RETRIEVAL_TOP_K
+from app.config import LLM_MODEL, LM_STUDIO_API_KEY, LM_STUDIO_BASE_URL, LLM_TIMEOUT, RETRIEVAL_TOP_K
 from ingestion.embedder import embed_query
 from persistence.vector_store import query_similar
 
@@ -45,7 +45,7 @@ CONTEXTE :
 
 _HUMAN_PROMPT = "{question}"
 
-# Nombre maximal de tentatives en cas d'erreur transitoire Ollama
+# Nombre maximal de tentatives en cas d'erreur transitoire LM Studio
 _MAX_RETRY = 3
 
 
@@ -65,7 +65,7 @@ def _with_retry(fn, max_attempts: int = _MAX_RETRY, base_delay: float = 1.0):
             if attempt < max_attempts - 1:
                 delay = base_delay * (2 ** attempt)
                 logger.warning(
-                    "LLM : tentative %d/%d échouée (%s). "
+                    "LM Studio LLM : tentative %d/%d échouée (%s). "
                     "Nouvel essai dans %.1fs...",
                     attempt + 1, max_attempts, exc, delay,
                 )
@@ -76,18 +76,19 @@ def _with_retry(fn, max_attempts: int = _MAX_RETRY, base_delay: float = 1.0):
 
 
 def build_rag_chain():
-    """Construit et retourne la chain LangChain (ChatOllama + prompt)."""
+    """Construit et retourne la chain LangChain (ChatOpenAI → LM Studio + prompt)."""
     try:
-        from langchain_ollama import ChatOllama
+        from langchain_openai import ChatOpenAI
     except ImportError as exc:
-        raise ImportError("langchain-ollama est requis : pip install langchain-ollama") from exc
+        raise ImportError("langchain-openai est requis : pip install langchain-openai") from exc
 
-    llm = ChatOllama(
+    llm = ChatOpenAI(
         model=LLM_MODEL,
-        base_url=OLLAMA_BASE_URL,
+        base_url=LM_STUDIO_BASE_URL,
+        api_key=LM_STUDIO_API_KEY,
         temperature=0.1,        # Réponses factuelles, peu créatives
-        num_predict=1024,        # Longueur max de la réponse
-        timeout=OLLAMA_TIMEOUT,  # Timeout explicite pour éviter les blocages
+        max_tokens=1024,        # Longueur max de la réponse
+        timeout=LLM_TIMEOUT,    # Timeout explicite (CPU-only = plus lent)
     )
 
     prompt = ChatPromptTemplate.from_messages([

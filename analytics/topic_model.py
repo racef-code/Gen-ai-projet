@@ -311,15 +311,20 @@ def clear_state() -> None:
 
 def _call_llm_for_label(topic_id: int, top_words: list[str]) -> str:
     """
-    Appelle ChatOllama pour générer un label court pour un cluster.
+    Appelle ChatOpenAI (LM Studio) pour générer un label court pour un cluster.
     Retourne un label générique en cas d'erreur.
     """
     try:
-        from langchain_ollama import ChatOllama
-        from app.config import LLM_MODEL, OLLAMA_BASE_URL
+        from langchain_openai import ChatOpenAI
+        from app.config import LLM_MODEL, LM_STUDIO_BASE_URL, LM_STUDIO_API_KEY
 
-        llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_BASE_URL,
-                         temperature=0.3, num_predict=20)
+        llm = ChatOpenAI(
+            model=LLM_MODEL,
+            base_url=LM_STUDIO_BASE_URL,
+            api_key=LM_STUDIO_API_KEY,
+            temperature=0.3,
+            max_tokens=20,
+        )
         prompt = (
             f"Voici les mots-clés d'un cluster thématique : {', '.join(top_words)}.\n"
             "Génère UN label court (2-4 mots maximum) qui résume ce thème. "
@@ -328,5 +333,6 @@ def _call_llm_for_label(topic_id: int, top_words: list[str]) -> str:
         response = llm.invoke(prompt)
         label = response.content.strip().strip('"').strip("'")
         return label[:50] if label else f"Topic {topic_id}"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Auto-label LLM échoué pour topic %d : %s", topic_id, exc)
         return f"Topic {topic_id}"

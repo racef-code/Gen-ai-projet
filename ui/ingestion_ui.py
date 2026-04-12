@@ -24,7 +24,7 @@ from app.config import (
 )
 from app.state import add_ingested_doc, get_ingested_docs
 from ingestion.chunker import chunk_text, get_chunks_stats
-from ingestion.embedder import check_ollama_connection, embed_chunks
+from ingestion.embedder import check_lm_studio_connection, embed_chunks
 from ingestion.loaders import SUPPORTED_EXTENSIONS, load_document
 from ingestion.scraper import scrape_url
 from persistence.incremental import compute_text_hash, is_duplicate, run_incremental_update
@@ -37,8 +37,8 @@ def render_ingestion_page() -> None:
     st.title("Ingestion de Documents")
     st.caption("Ajoutez des fichiers ou des URLs pour alimenter la base de connaissances.")
 
-    # ── Bannière de statut Ollama ──────────────────────────────────────────
-    _render_ollama_status()
+    # ── Bannière de statut LM Studio ──────────────────────────────────────
+    _render_lm_studio_status()
 
     st.divider()
 
@@ -322,9 +322,9 @@ def _run_ingestion_pipeline(
     except ConnectionError as exc:
         progress.empty()
         st.error(
-            f"Ollama inaccessible : {exc}. "
-            "Vérifiez qu'Ollama tourne (`ollama serve`) et que "
-            "`nomic-embed-text` est disponible (`ollama pull nomic-embed-text`)."
+            f"LM Studio inaccessible : {exc}. "
+            "Vérifiez que LM Studio est ouvert, qu'un modèle est chargé "
+            "et que le serveur local est démarré (port 1234)."
         )
     except Exception as exc:
         progress.empty()
@@ -407,18 +407,18 @@ def _render_ingested_docs_list() -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _render_ollama_status() -> None:
-    """Affiche un indicateur de connexion Ollama dans la sidebar."""
+def _render_lm_studio_status() -> None:
+    """Affiche un indicateur de connexion LM Studio dans la sidebar."""
     with st.sidebar:
-        st.subheader("Statut Ollama")
-        if st.button("Vérifier la connexion", key="btn_check_ollama"):
+        st.subheader("Statut LM Studio")
+        if st.button("Vérifier la connexion", key="btn_check_lm_studio"):
             with st.spinner("Connexion..."):
-                ok = check_ollama_connection()
+                ok = check_lm_studio_connection()
             if ok:
-                st.success("Ollama connecté")
+                st.success("LM Studio connecté")
             else:
-                st.error("Ollama inaccessible")
-                st.caption("Assurez-vous qu'Ollama tourne localement.")
+                st.error("LM Studio inaccessible")
+                st.caption("Ouvrez LM Studio, chargez un modèle et démarrez le serveur local.")
 
 
 def _fmt_size(size_bytes: int) -> str:

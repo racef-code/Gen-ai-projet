@@ -15,10 +15,14 @@ DB_PATH = DATA_DIR / "metadata.db"
 for _dir in [DATA_DIR, CHROMA_DIR, TOPIC_MODEL_DIR]:
     _dir.mkdir(parents=True, exist_ok=True)
 
-# ── Ollama ────────────────────────────────────────────────────────────────────
-OLLAMA_BASE_URL = "http://localhost:11434"
-LLM_MODEL = "llama3"           # ou "mistral", "phi3"
-EMBED_MODEL = "nomic-embed-text"
+# ── LM Studio ────────────────────────────────────────────────────────────────
+# LM Studio expose une API compatible OpenAI sur le port 1234.
+# 1. Ouvrir LM Studio → onglet "Local Server" → charger le modèle → Start Server
+# 2. Le modèle d'embedding doit aussi être chargé (onglet "Multi-Model" ou séparément)
+LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
+LM_STUDIO_API_KEY  = "lm-studio"          # Ignorée par LM Studio, requise par le client OpenAI
+LLM_MODEL   = "mistral-7b-instruct-v0.3"  # Doit correspondre au nom exact dans LM Studio
+EMBED_MODEL = "nomic-embed-text-v1.5"     # Modèle d'embedding chargé dans LM Studio
 
 # ── ChromaDB ──────────────────────────────────────────────────────────────────
 CHROMA_COLLECTION_NAME = "documents"
@@ -37,7 +41,7 @@ MIN_TOPIC_SIZE = 3             # taille minimale d'un cluster BERTopic
 NR_TOPICS = "auto"             # ou un entier fixe
 
 # ── Timeout & Limites ────────────────────────────────────────────────────────
-OLLAMA_TIMEOUT = 120           # secondes (timeout par requête Ollama)
+LLM_TIMEOUT = 180              # secondes (CPU-only sur Ryzen 7 = plus lent, marge large)
 MAX_FILE_SIZE_MB = 50          # taille max d'un fichier uploadé (Mo)
 
 # ── Scraper ───────────────────────────────────────────────────────────────────
