@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import time
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.config import LLM_MODEL, LM_STUDIO_API_KEY, LM_STUDIO_BASE_URL, LLM_TIMEOUT, RETRIEVAL_TOP_K
@@ -91,9 +91,10 @@ def build_rag_chain():
         timeout=LLM_TIMEOUT,    # Timeout explicite (CPU-only = plus lent)
     )
 
+    # Mistral via LM Studio ne supporte que les rôles "user" et "assistant".
+    # On fusionne le system prompt dans le message user (pas de rôle "system").
     prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(content=_HUMAN_PROMPT),
+        ("human", _SYSTEM_PROMPT + "\n\n" + _HUMAN_PROMPT),
     ])
 
     return prompt | llm
