@@ -2,8 +2,9 @@
 Vectorisation des chunks via nomic-embed-text (LM Studio).
 
 Architecture :
-- Utilise langchain-openai (client compatible OpenAI) pour appeler le modèle
-  d'embedding servi localement par LM Studio.
+- Appelle directement l'API HTTP /v1/embeddings de LM Studio via requests
+  (compatible OpenAI) pour éviter les bugs de sérialisation de langchain-openai
+  qui envoie parfois {"input": {"text": "..."}} au lieu de {"input": "..."}.
 - Traite les chunks par batch pour éviter les timeouts sur gros volumes.
 - Retourne les vecteurs dans le même ordre que les chunks d'entrée.
 - Retry automatique (3 tentatives, backoff exponentiel 1s/2s/4s) sur chaque
@@ -18,6 +19,8 @@ from __future__ import annotations
 import logging
 import time
 from typing import TYPE_CHECKING
+
+import requests
 
 from app.config import EMBED_MODEL, LM_STUDIO_API_KEY, LM_STUDIO_BASE_URL, LLM_TIMEOUT
 
@@ -75,7 +78,6 @@ def embed_chunks(chunks: "list[Chunk]") -> list[list[float]]:
     if not chunks:
         return []
 
-    embedder = _get_embedder()
     texts = [c.text for c in chunks]
     vectors: list[list[float]] = []
 
@@ -85,7 +87,7 @@ def embed_chunks(chunks: "list[Chunk]") -> list[list[float]]:
     for batch_start in range(0, total, _EMBED_BATCH_SIZE):
         batch = texts[batch_start: batch_start + _EMBED_BATCH_SIZE]
         try:
-            batch_vectors = _with_retry(lambda b=batch: embedder.embed_documents(b))
+            batch_vectors = _with_retry(lambda b=batch: _embed_via_http(b))
         except RuntimeError as exc:
             raise RuntimeError(
                 f"Erreur d'embedding (batch {batch_start}–{batch_start + len(batch)}): {exc}"
@@ -113,9 +115,9 @@ def embed_query(query: str) -> list[float]:
     Returns:
         Vecteur d'embedding (float).
     """
-    embedder = _get_embedder()
     try:
-        return _with_retry(lambda: embedder.embed_query(query))
+        results = _with_retry(lambda: _embed_via_http([query]))
+        return results[0]
     except RuntimeError as exc:
         raise RuntimeError(f"Erreur d'embedding de la requête : {exc}") from exc
 
@@ -128,9 +130,8 @@ def check_lm_studio_connection() -> bool:
         True si tout est OK, False sinon.
     """
     try:
-        embedder = _get_embedder()
-        result = embedder.embed_query("test connexion lm studio")
-        return len(result) > 0
+        result = _embed_via_http(["test connexion lm studio"])
+        return len(result) > 0 and len(result[0]) > 0
     except Exception as exc:
         logger.warning("LM Studio inaccessible : %s", exc)
         return False
@@ -142,21 +143,52 @@ check_ollama_connection = check_lm_studio_connection
 
 # ── Interne ───────────────────────────────────────────────────────────────────
 
-def _get_embedder():
+def _embed_via_http(texts: list[str]) -> list[list[float]]:
     """
-    Instancie OpenAIEmbeddings pointant sur LM Studio (langchain-openai).
-    LM Studio expose une API /v1/embeddings compatible OpenAI.
+    Appelle directement POST /v1/embeddings de LM Studio via requests.
+
+    LM Studio attend : {"model": "...", "input": ["texte1", "texte2", ...]}
+    Cette approche contourne les bugs de sérialisation de langchain-openai
+    qui envoie parfois {"input": {"text": "..."}} au lieu de {"input": [...]}.
+
+    Args:
+        texts: Liste de textes à vectoriser (doit être non vide).
+
+    Returns:
+        Liste de vecteurs float dans le même ordre que l'entrée.
+
+    Raises:
+        ConnectionError: Si LM Studio n'est pas accessible.
+        RuntimeError:    Si l'API retourne une erreur HTTP.
     """
+    url = f"{LM_STUDIO_BASE_URL}/embeddings"
+    headers = {
+        "Authorization": f"Bearer {LM_STUDIO_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": EMBED_MODEL,
+        "input": texts,  # toujours une liste de strings — jamais un objet
+    }
+
     try:
-        from langchain_openai import OpenAIEmbeddings
-    except ImportError as exc:
-        raise ImportError(
-            "langchain-openai est requis : pip install langchain-openai"
+        response = requests.post(url, json=payload, headers=headers, timeout=LLM_TIMEOUT)
+    except requests.exceptions.ConnectionError as exc:
+        raise ConnectionError(
+            f"Impossible de joindre LM Studio sur {url}. "
+            "Vérifiez que le serveur est démarré (onglet 'Local Server' → Start Server)."
+        ) from exc
+    except requests.exceptions.Timeout as exc:
+        raise RuntimeError(
+            f"Timeout ({LLM_TIMEOUT}s) en attendant LM Studio ({url})."
         ) from exc
 
-    return OpenAIEmbeddings(
-        model=EMBED_MODEL,
-        base_url=LM_STUDIO_BASE_URL,
-        api_key=LM_STUDIO_API_KEY,
-        timeout=LLM_TIMEOUT,
-    )
+    if not response.ok:
+        raise RuntimeError(
+            f"LM Studio a retourné une erreur {response.status_code} : {response.text}"
+        )
+
+    data = response.json()
+    # Trier par index pour garantir l'ordre (spec OpenAI)
+    items = sorted(data["data"], key=lambda x: x["index"])
+    return [item["embedding"] for item in items]

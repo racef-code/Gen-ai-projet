@@ -19,7 +19,7 @@ for _dir in [DATA_DIR, CHROMA_DIR, TOPIC_MODEL_DIR]:
 # LM Studio expose une API compatible OpenAI sur le port 1234.
 # 1. Ouvrir LM Studio → onglet "Local Server" → charger le modèle → Start Server
 # 2. Le modèle d'embedding doit aussi être chargé (onglet "Multi-Model" ou séparément)
-LM_STUDIO_BASE_URL = "http://localhost:1234/v1"
+LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1"
 LM_STUDIO_API_KEY  = "lm-studio"          # Ignorée par LM Studio, requise par le client OpenAI
 LLM_MODEL   = "mistral-7b-instruct-v0.3"  # Doit correspondre au nom exact dans LM Studio
 EMBED_MODEL = "nomic-embed-text-v1.5"     # Modèle d'embedding chargé dans LM Studio
